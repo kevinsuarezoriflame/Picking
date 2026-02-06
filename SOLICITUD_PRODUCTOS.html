@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Oriflame | Solicitud de Productos</title>
+
+<script src="https://cdn.sheetjs.com/xlsx-0.19.3/package/dist/xlsx.full.min.js"></script>
+
+<style>
+:root{
+  --orif-verde:#2CB9A8;
+  --orif-verde-soft:#E9F7F5;
+  --orif-verde-dark:#1F7F78;
+  --orif-bg:#F6FAF9;
+  --orif-border:#D7ECE8;
+  --orif-text:#1f2d2b;
+}
+
+body{
+  font-family:'Segoe UI',Tahoma,sans-serif;
+  background:var(--orif-bg);
+  color:var(--orif-text);
+  max-width:1200px;
+  margin:auto;
+  padding:20px;
+}
+
+h1{
+  color:var(--orif-verde);
+  margin-bottom:12px;
+}
+
+.panel{
+  background:white;
+  border:1px solid var(--orif-border);
+  border-radius:14px;
+  padding:20px;
+  margin-bottom:20px;
+}
+
+.panel.soft{
+  background:var(--orif-verde-soft);
+}
+
+.admin-toggle{
+  font-size:14px;
+  color:#6BAFA7;
+  cursor:pointer;
+  user-select:none;
+  margin-bottom:8px;
+}
+
+.oculto{display:none;}
+
+.form-group{
+  display:flex;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+input{
+  padding:12px;
+  border-radius:8px;
+  border:1px solid var(--orif-border);
+  font-size:15px;
+}
+
+#nombre{flex:2;text-transform:uppercase;}
+#codigo,#cantidad{flex:1;}
+
+button{
+  background:var(--orif-verde-dark);
+  color:white;
+  border:none;
+  border-radius:10px;
+  padding:12px 22px;
+  font-weight:600;
+  cursor:pointer;
+}
+button:hover{opacity:.9;}
+
+.btn-del{
+  background:#E86B6B;
+  padding:6px 12px;
+  font-size:12px;
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+  background:white;
+  border-radius:14px;
+  overflow:hidden;
+}
+
+th{
+  background:var(--orif-verde);
+  color:white;
+  padding:12px;
+  font-size:14px;
+}
+
+td{
+  padding:12px;
+  border-bottom:1px solid var(--orif-border);
+  font-size:14px;
+}
+
+.ubi{
+  background:var(--orif-verde-soft);
+  color:var(--orif-verde-dark);
+  padding:4px 10px;
+  border-radius:8px;
+  font-weight:600;
+}
+
+small{font-size:11px;color:#6f8f8b;}
+</style>
+</head>
+
+<body>
+
+<h1>📦 Solicitud de Productos</h1>
+
+<!-- ===== PANEL REPLEGABLE EXCEL ===== -->
+<div class="admin-toggle" onclick="toggleAdmin()">▸ Ingreso de documento</div>
+
+<div id="panelExcel" class="panel soft oculto">
+  <strong>Carga de ubicaciones</strong><br><br>
+  <input type="file" id="excelInput" accept=".xlsx">
+  <button onclick="cargarExcel()">Subir y reemplazar</button>
+  <span id="estadoCarga"></span>
+</div>
+
+<!-- ===== FORMULARIO ===== -->
+<div class="panel">
+  <div class="form-group">
+    <input id="nombre" placeholder="Responsable">
+    <input id="codigo" placeholder="Código">
+    <input id="cantidad" type="number" placeholder="Cantidad">
+    <button onclick="agregarPedido()">Agregar</button>
+  </div>
+</div>
+
+<!-- ===== TABLA ===== -->
+<table>
+<thead>
+<tr>
+  <th>Responsable</th>
+  <th>Código</th>
+  <th>Ubicación</th>
+  <th>Cant.</th>
+  <th>Hora</th>
+  <th>Acción</th>
+</tr>
+</thead>
+<tbody id="tabla"></tbody>
+</table>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js";
+import {
+  getFirestore, collection, addDoc, getDocs, deleteDoc,
+  doc, setDoc, onSnapshot, query, orderBy, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
+
+/* ===== FIREBASE ===== */
+const firebaseConfig = {
+  apiKey: "AIzaSyD35KKCQsl6CbX4rRBL5csrk46BPKsvRXc",
+  authDomain: "oriflame-picking.firebaseapp.com",
+  projectId: "oriflame-picking",
+  storageBucket: "oriflame-picking.firebasestorage.app",
+  messagingSenderId: "939685796463",
+  appId: "1:939685796463:web:e9ff3588b157c786404b9a"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+const COL_UBI = collection(db,"UBICACIONES");
+const COL_PED = collection(db,"SOLICITUDES");
+
+/* ===== TOGGLE PANEL ===== */
+window.toggleAdmin=()=>{
+  document.getElementById("panelExcel").classList.toggle("oculto");
+};
+
+/* ===== RESPONSABLE FIJO ===== */
+const nombre=document.getElementById("nombre");
+nombre.value=localStorage.getItem("resp")||"";
+nombre.oninput=()=>localStorage.setItem("resp",nombre.value);
+
+/* ===== CARGAR EXCEL ===== */
+window.cargarExcel=async()=>{
+  const file=document.getElementById("excelInput").files[0];
+  if(!file)return alert("Selecciona archivo");
+
+  estadoCarga.innerText="⏳ Procesando...";
+  estadoCarga.style.color="#6f8f8b";
+
+  const data=await file.arrayBuffer();
+  const wb=XLSX.read(data);
+  const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
+
+  const snap=await getDocs(COL_UBI);
+  for(const d of snap.docs) await deleteDoc(d.ref);
+
+  let count=0;
+  for(const r of rows){
+    if(!r.Variante||!r.Caja)continue;
+    await setDoc(doc(db,"UBICACIONES",String(r.Variante)),{
+      ubicacion:String(r.Caja)
+    });
+    count++;
+  }
+
+  estadoCarga.innerText=`✅ Documento cargado correctamente (${count} ubicaciones)`;
+  estadoCarga.style.color="#1F7F78";
+
+  setTimeout(()=>{ estadoCarga.innerText=""; },3000);
+};
+
+/* ===== AGREGAR PEDIDO ===== */
+window.agregarPedido=async()=>{
+  const codigo=document.getElementById("codigo").value.trim();
+  const cantidad=document.getElementById("cantidad").value;
+  if(!nombre.value||!codigo||!cantidad)return;
+
+  let ubicacion="NO DEFINIDA";
+  const snap=await getDocs(COL_UBI);
+  snap.forEach(d=>{if(d.id===codigo)ubicacion=d.data().ubicacion});
+
+  await addDoc(COL_PED,{
+    nombre:nombre.value,
+    codigo, cantidad,
+    ubicacion,
+    timestamp:serverTimestamp()
+  });
+
+  codigo.value="";
+  cantidad.value="";
+};
+
+/* ===== TABLA TIEMPO REAL ===== */
+const q=query(COL_PED,orderBy("timestamp","desc"));
+onSnapshot(q,s=>{
+  tabla.innerHTML="";
+  s.forEach(d=>{
+    const x=d.data();
+    const h=x.timestamp?new Date(x.timestamp.seconds*1000).toLocaleTimeString():"";
+    tabla.innerHTML+=`
+    <tr>
+      <td>${x.nombre}</td>
+      <td><b>${x.codigo}</b></td>
+      <td><span class="ubi">${x.ubicacion}</span></td>
+      <td>${x.cantidad}</td>
+      <td><small>${h}</small></td>
+      <td><button class="btn-del" onclick="del('${d.id}')">Eliminar</button></td>
+    </tr>`;
+  });
+});
+
+window.del=async id=>{
+  if(confirm("¿Eliminar pedido?"))
+    await deleteDoc(doc(db,"SOLICITUDES",id));
+};
+</script>
+
+</body>
+</html>
